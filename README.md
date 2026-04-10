@@ -51,7 +51,7 @@ MOSS-TTS-Nano is an open-source **multilingual tiny speech generation model** fr
 ## Introduction
 
 <p align="center">
-  <img src="./assets/images/concept.png" alt="MOSS-TTS-Nano concept" />
+  <img src="./assets/images/concept.png" alt="MOSS-TTS-Nano concept" width="85%" />
 </p>
 
 MOSS-TTS-Nano focuses on the part of TTS deployment that matters most in practice: **small footprint**, **low latency**, **good enough quality for realtime products**, and **simple local setup**. It uses a pure autoregressive **Audio Tokenizer + LLM** pipeline and keeps the inference workflow friendly for both terminal users and web-demo users.
