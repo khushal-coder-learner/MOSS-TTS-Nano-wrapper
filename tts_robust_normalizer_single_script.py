@@ -22,15 +22,27 @@ TTS 输入鲁棒性正则化器（非语义 TN）
    - 汉字 / 日文假名片段内部：删除空格。
    - 汉字 / 日文假名 与“拉丁字母类 token / 受保护 token”相邻：保留或补 1 个空格。
    - 汉字 / 日文假名 与纯数字相邻：不强行补空格。
+   - 普通文本中的 `_` 转成空格；已被保护的 URL / Email / mention / hashtag / 文件名中的 `_` 保留。
 7. 轻量处理 Markdown 与换行：
    - `[text](url)` -> `text url`
    - 去掉标题 `#`、引用 `>`、列表前缀
    - 换行转句边界 `。`
+8. 与 WeTextProcessing 联动时，中文分支会在进入 WeText 前额外处理单个 ASCII 连字符 `-`，
+   以避免被中文 TN 误读成“减”。这部分逻辑实现于 `text_normalization_pipeline.py`，约定如下：
+   - `数字-数字` 保留：`10-3`、`2024-05-01`
+   - 明显负号保留：`-2`、`为-2`、`为 -2`、`x=-2`、`(-2)`、`计算-2的绝对值`
+   - `中文-中文` 转成停顿边界：`请求接入-身份判定` -> `请求接入，身份判定`
+   - 其余非数字连字符转成空格：`A-B`、`A-100`、`GPU-A100`、`TTS-demo`、
+     `中文-ABC`、`ABC-中文`
+   - 连字符两侧是否带空格不影响判断：`A-B` / `A - B`、`为-2` / `为 -2`
+   - 当前仅对中文 WeText 分支生效；若文本被判定为英文分支，则仍按英文 WeText 原生行为处理，
+     例如 `is -2` 当前会归一化为 `is negative two`
 
 非目标
 ------
 1. 不决定“应该怎么读”。
-2. 不做 HTML/SSML/语义标签解释。
+2. 不在本脚本内直接实现 WeText 的语义 TN，相关联动仅在共享 pipeline 中做最小预处理。
+3. 不做 HTML/SSML/语义标签解释。
 """
 
 from __future__ import annotations
@@ -61,10 +73,12 @@ _HASHTAG_RE = re.compile(r"(?<![A-Za-z0-9_])#(?!\s)[^\s#]+")
 _DOT_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])\.(?=[A-Za-z0-9._-]*[A-Za-z0-9])[A-Za-z0-9._-]+")
 
 # `app.js.map` / `index.d.ts` / `v2.3.1` / `foo/bar-baz.py` 等
+# 这里不把“仅含下划线的 snake_case 普通文本”视为高风险 token，
+# 以便后续 `_` -> 空格 规则能生效；真正的文件名/路径通常仍会因为含 `.` `/` `-` `:` `+` 被保护。
 _FILELIKE_RE = re.compile(
     r"(?<![A-Za-z0-9_])"
     r"(?=[A-Za-z0-9._/+:-]*[A-Za-z])"
-    r"(?=[A-Za-z0-9._/+:-]*[._/+:-])"
+    r"(?=[A-Za-z0-9._/+:-]*[./+:-])"
     r"[A-Za-z0-9][A-Za-z0-9._/+:-]*"
     r"(?![A-Za-z0-9_])"
 )
@@ -87,6 +101,7 @@ def normalize_tts_text(text: str) -> str:
     text = _normalize_markdown_and_lines(text)
     text = _normalize_flow_arrows(text)
     text, protected = _protect_spans(text)
+    text = _normalize_visible_underscores(text)
 
     text = _normalize_spaces(text)
     text = _normalize_structural_punctuation(text)
@@ -167,6 +182,14 @@ def _restore_spans(text: str, protected: list[str]) -> str:
     for idx, original in enumerate(protected):
         text = text.replace(f"___PROT{idx}___", original)
     return text
+
+
+def _normalize_visible_underscores(text: str) -> str:
+    parts = re.split(rf"({_PROT})", text)
+    return "".join(
+        part if re.fullmatch(_PROT, part) else part.replace("_", " ")
+        for part in parts
+    )
 
 
 def _normalize_flow_arrows(text: str) -> str:
@@ -329,6 +352,9 @@ TEST_CASES = [
     ("mixed_spaces_1", "这是Anthropic的npm包", "这是 Anthropic 的 npm 包。"),
     ("mixed_spaces_2", "今天update到v2.3.1了", "今天 update 到 v2.3.1 了。"),
     ("mixed_spaces_3", "处理app.js.map文件", "处理 app.js.map 文件。"),
+    ("underscore_plain_1", "foo_bar", "foo bar。"),
+    ("underscore_plain_2", "中文_ABC", "中文 ABC。"),
+    ("underscore_protected_mention", "关注@foo_bar", "关注 @foo_bar。"),
 
     # 8) Markdown / 列表 / 换行
     ("markdown_link", "详情见 [release note](https://github.com/example/release)", "详情见 release note https://github.com/example/release。"),

@@ -10,6 +10,7 @@ from tts_robust_normalizer_single_script import normalize_tts_text
 
 ENGLISH_VOICES = frozenset({"Trump", "Ava", "Bella", "Adam", "Nathan"})
 CUSTOM_ZH_WETEXT_CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "wetext_zh_no_erhua_keep_punct"
+_ZH_WETEXT_KEEP_HYPHEN = "___KEEP_HYPHEN_BEFORE_ZH_WETEXT___"
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,58 @@ def resolve_text_normalization_language(*, text: str, voice: str) -> str:
     return "zh"
 
 
+def _rewrite_hyphens_before_zh_wetext(text: str) -> str:
+    """Avoid Chinese WeText reading non-numeric hyphens as '减'."""
+    rewritten = str(text or "")
+    if "-" not in rewritten:
+        return rewritten
+
+    # Preserve start-of-text negatives like `-2`.
+    rewritten = re.sub(
+        r"(^\s*)-\s*(?=\d)",
+        rf"\1{_ZH_WETEXT_KEEP_HYPHEN}",
+        rewritten,
+    )
+
+    # Preserve negatives after common delimiters like `x=-2` or `(-2)`.
+    rewritten = re.sub(
+        r"([=:+*/,(，:：；;（【\[{])\s*-\s*(?=\d)",
+        rf"\1{_ZH_WETEXT_KEEP_HYPHEN}",
+        rewritten,
+    )
+
+    # Preserve Chinese-context negatives like `为-2` / `计算-2`.
+    rewritten = re.sub(
+        r"([\u3400-\u9fff])\s*-\s*(?=\d)",
+        rf"\1{_ZH_WETEXT_KEEP_HYPHEN}",
+        rewritten,
+    )
+
+    # Preserve numeric ranges/dates like `10-3` / `2024-05-01`.
+    rewritten = re.sub(
+        r"(\d)\s*-\s*(?=\d)",
+        rf"\1{_ZH_WETEXT_KEEP_HYPHEN}",
+        rewritten,
+    )
+
+    # Chinese compound phrases sound more natural with a pause boundary.
+    rewritten = re.sub(
+        r"([\u3400-\u9fff])\s*-\s*(?=[\u3400-\u9fff])",
+        r"\1，",
+        rewritten,
+    )
+
+    # Remaining token-internal hyphens are flattened to spaces for zh WeText.
+    rewritten = re.sub(
+        r"([^\s-])\s*-\s*(?=[^\s-])",
+        r"\1 ",
+        rewritten,
+    )
+
+    rewritten = re.sub(r" {2,}", " ", rewritten).strip()
+    return rewritten.replace(_ZH_WETEXT_KEEP_HYPHEN, "-")
+
+
 def prepare_tts_request_texts(
     *,
     text: str,
@@ -179,6 +232,23 @@ def prepare_tts_request_texts(
         wetext_input_text = intermediate_text
         wetext_input_prompt_text = intermediate_prompt_text
         normalization_language = resolve_text_normalization_language(text=wetext_input_text, voice=voice)
+        if normalization_language == "zh":
+            rewritten_wetext_input_text = _rewrite_hyphens_before_zh_wetext(wetext_input_text)
+            rewritten_wetext_input_prompt_text = _rewrite_hyphens_before_zh_wetext(wetext_input_prompt_text)
+            if rewritten_wetext_input_text != wetext_input_text:
+                logging.info(
+                    "rewrote zh wetext text hyphens chars_before=%d chars_after=%d stage=zh_wetext_hyphen_guard",
+                    len(wetext_input_text),
+                    len(rewritten_wetext_input_text),
+                )
+            if wetext_input_prompt_text and rewritten_wetext_input_prompt_text != wetext_input_prompt_text:
+                logging.info(
+                    "rewrote zh wetext prompt_text hyphens chars_before=%d chars_after=%d stage=zh_wetext_hyphen_guard",
+                    len(wetext_input_prompt_text),
+                    len(rewritten_wetext_input_prompt_text),
+                )
+            wetext_input_text = rewritten_wetext_input_text
+            wetext_input_prompt_text = rewritten_wetext_input_prompt_text
         intermediate_text, intermediate_prompt_text = text_normalizer_manager.normalize(
             text=wetext_input_text,
             prompt_text=wetext_input_prompt_text,
