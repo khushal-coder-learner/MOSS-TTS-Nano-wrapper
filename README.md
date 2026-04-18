@@ -88,7 +88,7 @@ If something breaks:
 ## ✅ Quick Start
 
 ```bash
-git clone ...
+git clone https://github.com/khushal-coder-learner/MOSS-TTS-Nano-wrapper.git
 cd MOSS-TTS-Nano
 ./setup.sh
 python run.py
