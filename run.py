@@ -19,6 +19,7 @@ def generate_tts(
     prompt_audio_path: str | Path | None = None,
     prompt_text: str | None = None,
 ) -> dict[str, object]:
+
     result = runtime.synthesize(
         text=text,
         voice=voice,
@@ -28,12 +29,29 @@ def generate_tts(
         prompt_text=prompt_text,
     )
 
-    saved_path = Path(str(result["audio_path"])).expanduser()
+    saved_path = Path(str(result.get("audio_path", ""))).expanduser()
+
+    # Always ensure audio is saved properly
     if not saved_path.exists():
         waveform = result["waveform"]
         sample_rate = int(result["sample_rate"])
-        torchaudio.save(str(output_path), waveform.unsqueeze(0), sample_rate)
-        result["audio_path"] = str(Path(output_path).expanduser().resolve())
+
+        waveform = waveform.float()
+
+        # Fix shape
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+
+        # Convert stereo → mono (optional but safer)
+        if waveform.dim() == 2 and waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        # Normalize
+        if waveform.abs().max() > 0:
+            waveform = waveform / waveform.abs().max()
+
+        torchaudio.save(str(output_path), waveform, sample_rate)
+        result["audio_path"] = str(Path(output_path).resolve())
 
     return result
 
